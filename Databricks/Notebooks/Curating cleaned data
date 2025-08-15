@@ -1,0 +1,43 @@
+# Load CSV from mounted ADLS Gen2 raw zone
+df = spark.read.option("header", True).option("inferSchema", True).csv("/mnt/smartgrid/raw/raw_data.csv")
+
+# Standardize column names (lowercase, replace spaces and special chars)
+df_cleaned = df.toDF(*[c.strip().lower().replace(" ", "_").replace("%", "percent") for c in df.columns])
+
+# Drop duplicate records if any
+df_cleaned = df_cleaned.dropDuplicates()
+
+# Handle nulls (fill numerics with 0, leave string columns unchanged or drop if many nulls)
+from pyspark.sql.functions import col
+numeric_cols = [field.name for field in df_cleaned.schema.fields if str(field.dataType) != "StringType"]
+df_cleaned = df_cleaned.fillna(0, subset=numeric_cols)
+
+# (Optional) Inspect cleaned schema and preview
+df_cleaned.printSchema()
+display(df_cleaned)
+
+# ✅ Write cleaned data as a single file to clean zone
+(
+    df_cleaned
+    .coalesce(1)
+    .write
+    .mode("overwrite")
+    .option("header", True)
+    .csv("/mnt/smartgrid/clean/smart_grid_cleaned_tmp")
+)
+
+import os
+#List all files in the output directory
+files = dbutils.fs.ls("/mnt/smartgrid/clean/smart_grid_cleaned_tmp")
+
+#Find the part file (usually starts with "part-")
+part_file = [f.path for f in files if f.name.startswith("part-") and f.name.endswith(".csv")][0]
+
+#Rename it to something identifiable
+dbutils.fs.mv(
+    part_file,
+    "/mnt/smartgrid/clean/smart_grid_cleaned.csv"
+)
+
+#(Optional): Remove the original folder
+dbutils.fs.rm("/mnt/smartgrid/clean/smart_grid_cleaned_tmp", recurse=True)
