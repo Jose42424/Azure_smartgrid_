@@ -1,0 +1,13 @@
+# Set config values
+storage_account_name = "smartgridstoragejm"
+storage_account_key = "<>"
+
+# Mount point
+mount_point = "/mnt/smartgrid"
+
+# Mount the ADLS Gen2 container
+dbutils.fs.mount(
+  source = f"wasbs://smartgrid@{storage_account_name}.blob.core.windows.net",
+  mount_point = mount_point,
+  extra_configs = {f"fs.azure.account.key.{storage_account_name}.blob.core.windows.net": storage_account_key}
+)
