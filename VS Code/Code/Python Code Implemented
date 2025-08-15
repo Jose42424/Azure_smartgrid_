@@ -1,0 +1,35 @@
+import json
+import time
+import random
+from azure.eventhub import EventHubProducerClient, EventData
+
+# Azure Event Hub connection
+CONNECTION_STR = "Endpoint=sb://jmeventhubs.servicebus.windows.net/;SharedAccessKeyName=send-policy;SharedAccessKey=<>;EntityPath=smartgridstream"
+EVENTHUB_NAME = "smartgridstream"
+
+# Create Event Hub producer client
+producer = EventHubProducerClient.from_connection_string(
+    conn_str=CONNECTION_STR,
+    eventhub_name=EVENTHUB_NAME
+)
+
+# Generate simulated smart grid data
+def generate_smartgrid_event():
+    return {
+        "timestamp": time.strftime('%Y-%m-%d %H:%M:%S'),
+        "meter_id": f"MTR-{random.randint(1000, 9999)}",
+        "real_power_watts": round(random.uniform(500, 5000), 2),
+        "voltage": round(random.uniform(210, 240), 2),
+        "power_factor": round(random.uniform(0.85, 1.0), 2)
+    }
+
+# Send test events
+with producer:
+    for i in range(10):
+        event_data = json.dumps(generate_smartgrid_event())
+        print(f"Sending: {event_data}")
+        batch = producer.create_batch()
+        batch.add(EventData(event_data))
+        producer.send_batch(batch)
+        time.sleep(1)
+        print(f"Event {i + 1} sent successfully.")
