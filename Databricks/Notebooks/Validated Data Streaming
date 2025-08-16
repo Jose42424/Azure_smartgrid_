@@ -1,0 +1,78 @@
+# Databricks notebook: smartgrid_validated_writer
+
+from pyspark.sql.functions import from_json, col
+from pyspark.sql.types import *
+from py4j.protocol import Py4JJavaError
+
+# ========= 0) Storage + EH DETAILS (yours) =========
+storage_acct = "smartgridstoragejm"
+container    = "smartgrid"
+storage_base_uri = f"abfss://{container}@{storage_acct}.dfs.core.windows.net"
+
+# Event Hubs 
+eh_connection_string_plain = (
+    "Endpoint=sb://smartgrid-2nd.servicebus.windows.net/;"
+    "SharedAccessKeyName=smartgrid-listen;"
+    "SharedAccessKey="<>;"
+    "EntityPath=smartgrid-stream"
+)
+
+# ABFS key (yours)
+spark.conf.set(
+    "fs.azure.account.key.smartgridstoragejm.dfs.core.windows.net",
+    "<>"
+)
+
+validated_path  = f"{storage_base_uri}/curated/validated_data"
+checkpoint_val  = f"{storage_base_uri}/checkpoints/validated_delta"
+bad_records     = f"{storage_base_uri}/quarantine/bad_records"
+
+# ========= 1) Event Hubs config =========
+eh_connection_string = spark._sc._jvm.org.apache.spark.eventhubs.EventHubsUtils.encrypt(
+    eh_connection_string_plain
+)
+eh_conf = {
+    "eventhubs.connectionString": eh_connection_string,
+    "eventhubs.consumerGroup": "$Default"
+}
+
+# ========= 2) Schema for incoming JSON =========
+schema = StructType([
+    StructField("timestamp",        StringType()),
+    StructField("meter_id",         StringType()),
+    StructField("real_power_watts", DoubleType()),
+    StructField("voltage",          DoubleType()),
+    StructField("power_factor",     DoubleType())
+    # If upstream later adds more fields, they will be captured (*).
+])
+
+# ========= 3) Read from Event Hubs =========
+raw_stream_df = (
+    spark.readStream
+         .format("eventhubs")
+         .options(**eh_conf)
+         .load()
+)
+
+# ========= 4) Parse JSON into columns =========
+json_df = (
+    raw_stream_df
+      .selectExpr("CAST(body AS STRING) AS json_str")
+      .select(from_json("json_str", schema).alias("data"))
+      .select("data.*")
+)
+
+# ========= 5) Write to validated as Delta with schema evolution options =========
+# Use Delta so downstream curated can evolve schema easily.
+validated_query = (
+    json_df.writeStream
+      .format("delta")
+      .option("checkpointLocation", checkpoint_val)
+      .option("mergeSchema", "true")
+      .option("badRecordsPath", bad_records)    # capture malformed rows
+      .outputMode("append")
+      # .trigger(once=True)                     # <- uncomment to run one micro-batch and stop
+      .start(validated_path)
+)
+
+print(f"Writing validated Delta stream to: {validated_path}")
